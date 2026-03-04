@@ -1,0 +1,774 @@
+import { Context, Hono } from 'hono';
+import { cors } from 'hono/cors';
+
+type Bindings = {
+  dataapi: R2Bucket;
+  DB: D1Database;
+  ADMIN_TOKEN?: string;
+};
+
+type GatewayRecord = {
+  key: string;
+  target_url: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type UserRecord = {
+  id: number;
+  nama: string;
+  email: string;
+  no_wa: string;
+  api_key: string;
+  limit_per_month: number;
+  total_hit: number;
+  status: 'active' | 'banned';
+};
+
+const app = new Hono<{ Bindings: Bindings }>();
+app.use('/api/*', cors());
+
+const DEFAULT_LIMIT = 100;
+let userTableInitialized = false;
+
+const cleanKey = (rawKey: string) => rawKey.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
+const objectName = (key: string) => `${cleanKey(key)}.json`;
+const cleanText = (v: string) => v.trim().replace(/[\u0000-\u001f\u007f]/g, '');
+
+const ensureUsersTable = async (db: D1Database) => {
+  if (userTableInitialized) return;
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      nama TEXT NOT NULL,
+      email TEXT NOT NULL UNIQUE,
+      no_wa TEXT NOT NULL,
+      api_key TEXT NOT NULL UNIQUE,
+      limit_per_month INTEGER NOT NULL DEFAULT 100,
+      total_hit INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'banned')),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_users_api_key ON users(api_key);
+  `);
+  userTableInitialized = true;
+};
+
+const listGateways = async (bucket: R2Bucket): Promise<GatewayRecord[]> => {
+  const all: GatewayRecord[] = [];
+  let cursor: string | undefined;
+
+  do {
+    const page = await bucket.list({ cursor });
+    for (const item of page.objects) {
+      if (!item.key.endsWith('.json')) continue;
+      const obj = await bucket.get(item.key);
+      if (!obj) continue;
+
+      const parsed = (await obj.json()) as Partial<GatewayRecord>;
+      if (!parsed.key || !parsed.target_url) continue;
+
+      all.push({
+        key: parsed.key,
+        target_url: parsed.target_url,
+        created_at: parsed.created_at ?? new Date().toISOString(),
+        updated_at: parsed.updated_at ?? new Date().toISOString()
+      });
+    }
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+
+  return all.sort((a, b) => a.key.localeCompare(b.key));
+};
+
+const createApiKey = (): string => {
+  const random = crypto.randomUUID().replace(/-/g, '').slice(0, 12);
+  return `ak_${random}`;
+};
+
+const parseApiKey = (c: Context<{ Bindings: Bindings }>): string => {
+  const queryKey = cleanText(c.req.query('apikey') ?? '');
+  const headerKey = cleanText(c.req.header('x-api-key') ?? '');
+  return queryKey || headerKey;
+};
+
+const getUserByApiKey = async (db: D1Database, apiKey: string): Promise<UserRecord | null> => {
+  const data = await db
+    .prepare('SELECT id, nama, email, no_wa, api_key, limit_per_month, total_hit, status FROM users WHERE api_key = ? LIMIT 1')
+    .bind(apiKey)
+    .first<UserRecord>();
+
+  return data ?? null;
+};
+
+const adminHtml = `<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>API Gateway Admin</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+  <div class="absolute inset-0 bg-[radial-gradient(circle_at_top_right,#22d3ee22,transparent_40%),radial-gradient(circle_at_bottom_left,#a855f722,transparent_45%)] pointer-events-none"></div>
+  <main class="relative z-10 max-w-6xl mx-auto p-6 md:p-10">
+    <header class="mb-8 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+      <div>
+        <p class="text-cyan-300 tracking-[0.25em] uppercase text-xs">Cloudflare Worker</p>
+        <h1 class="text-3xl md:text-4xl font-bold">Luxury API Gateway Dashboard</h1>
+      </div>
+      <div class="flex gap-2">
+        <a href="/register" class="px-4 py-3 rounded-xl border border-cyan-400/40 text-cyan-300">Register User</a>
+        <button id="openModal" class="px-5 py-3 rounded-xl bg-gradient-to-r from-cyan-500 to-violet-600 font-semibold">+ Add API</button>
+      </div>
+    </header>
+
+    <section class="grid md:grid-cols-3 gap-4 mb-8">
+      <article class="bg-white/10 backdrop-blur-xl border border-white/10 rounded-2xl p-5">
+        <p class="text-slate-300 text-sm">Total API Aktif</p>
+        <p id="totalApi" class="text-4xl font-extrabold text-cyan-300 mt-2">0</p>
+      </article>
+      <article class="bg-white/10 backdrop-blur-xl border border-white/10 rounded-2xl p-5">
+        <p class="text-slate-300 text-sm">Total User</p>
+        <p id="totalUser" class="text-4xl font-extrabold text-violet-300 mt-2">0</p>
+      </article>
+      <article class="bg-white/10 backdrop-blur-xl border border-white/10 rounded-2xl p-5">
+        <p class="text-slate-300 text-sm">User Active</p>
+        <p id="activeUser" class="text-4xl font-extrabold text-emerald-300 mt-2">0</p>
+      </article>
+    </section>
+
+    <section class="mb-4 flex gap-2">
+      <button data-tab="gateways" class="tabBtn px-4 py-2 rounded-xl bg-cyan-500/20 border border-cyan-400/40">Manage Gateways</button>
+      <button data-tab="users" class="tabBtn px-4 py-2 rounded-xl border border-white/20">Manage Users</button>
+    </section>
+
+    <section class="bg-white/10 backdrop-blur-xl border border-white/10 rounded-2xl p-4 mb-4">
+      <input id="searchInput" class="w-full bg-slate-900/70 border border-cyan-400/30 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-cyan-400" placeholder="Cari gateway key atau email user" />
+    </section>
+
+    <section id="gatewayPanel" class="bg-white/10 backdrop-blur-xl border border-white/10 rounded-2xl overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-900/60 text-slate-300">
+            <tr>
+              <th class="text-left px-4 py-3">Key</th>
+              <th class="text-left px-4 py-3">Target URL</th>
+              <th class="text-left px-4 py-3">Updated</th>
+              <th class="text-right px-4 py-3">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="gatewayBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="userPanel" class="hidden bg-white/10 backdrop-blur-xl border border-white/10 rounded-2xl overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-900/60 text-slate-300">
+            <tr>
+              <th class="text-left px-4 py-3">Nama</th>
+              <th class="text-left px-4 py-3">Email</th>
+              <th class="text-left px-4 py-3">No WA</th>
+              <th class="text-left px-4 py-3">Hit/Limit</th>
+              <th class="text-left px-4 py-3">Status</th>
+              <th class="text-right px-4 py-3">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="userBody"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <div id="gatewayModal" class="hidden fixed inset-0 bg-slate-950/70 backdrop-blur-sm items-center justify-center p-4">
+    <div class="w-full max-w-xl bg-slate-900/90 border border-cyan-400/40 rounded-2xl p-6">
+      <h2 id="modalTitle" class="text-2xl font-bold mb-4">Add API Gateway</h2>
+      <form id="gatewayForm" class="space-y-4">
+        <input id="keyInput" required class="w-full px-4 py-3 rounded-xl bg-slate-950 border border-white/10" placeholder="Key Name" />
+        <input id="urlInput" type="url" required class="w-full px-4 py-3 rounded-xl bg-slate-950 border border-white/10" placeholder="Target API URL" />
+        <div class="flex justify-end gap-3">
+          <button type="button" id="closeModal" class="px-4 py-2 rounded-lg border border-white/20">Cancel</button>
+          <button type="submit" class="px-5 py-2 rounded-lg bg-gradient-to-r from-cyan-500 to-violet-600">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+<script>
+const state = { gateways: [], users: [], tab: 'gateways', editingGateway: null };
+const gatewayBody = document.getElementById('gatewayBody');
+const userBody = document.getElementById('userBody');
+const searchInput = document.getElementById('searchInput');
+const gatewayPanel = document.getElementById('gatewayPanel');
+const userPanel = document.getElementById('userPanel');
+const gatewayModal = document.getElementById('gatewayModal');
+const keyInput = document.getElementById('keyInput');
+const urlInput = document.getElementById('urlInput');
+
+const esc = (s) => String(s).replace(/[&<>\"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[ch]));
+
+function switchTab(tab) {
+  state.tab = tab;
+  document.querySelectorAll('.tabBtn').forEach((btn) => {
+    const active = btn.getAttribute('data-tab') === tab;
+    btn.className = 'tabBtn px-4 py-2 rounded-xl border ' + (active ? 'bg-cyan-500/20 border-cyan-400/40' : 'border-white/20');
+  });
+  gatewayPanel.classList.toggle('hidden', tab !== 'gateways');
+  userPanel.classList.toggle('hidden', tab !== 'users');
+  render();
+}
+
+function render() {
+  const q = searchInput.value.trim().toLowerCase();
+  const gatewayFiltered = state.gateways.filter((item) => item.key.toLowerCase().includes(q));
+  const userFiltered = state.users.filter((u) => (u.nama + ' ' + u.email + ' ' + u.no_wa).toLowerCase().includes(q));
+
+  gatewayBody.innerHTML = gatewayFiltered.map((item) =>
+    '<tr class="border-t border-white/10">' +
+    '<td class="px-4 py-3 text-cyan-300 font-semibold">' + esc(item.key) + '</td>' +
+    '<td class="px-4 py-3">' + esc(item.target_url) + '</td>' +
+    '<td class="px-4 py-3 text-slate-400">' + new Date(item.updated_at).toLocaleString('id-ID') + '</td>' +
+    '<td class="px-4 py-3"><div class="flex justify-end gap-2">' +
+      '<button data-copy="' + esc(item.key) + '" class="px-3 py-1 rounded-lg border border-cyan-400/40 text-cyan-300">Copy Link</button>' +
+      '<button data-edit="' + esc(item.key) + '" class="px-3 py-1 rounded-lg border border-violet-400/40 text-violet-300">Edit</button>' +
+      '<button data-delete="' + esc(item.key) + '" class="px-3 py-1 rounded-lg border border-rose-400/40 text-rose-300">Delete</button>' +
+    '</div></td></tr>'
+  ).join('') || '<tr><td colspan="4" class="px-4 py-10 text-center text-slate-400">Tidak ada gateway.</td></tr>';
+
+  userBody.innerHTML = userFiltered.map((user) =>
+    '<tr class="border-t border-white/10">' +
+    '<td class="px-4 py-3">' + esc(user.nama) + '</td>' +
+    '<td class="px-4 py-3">' + esc(user.email) + '</td>' +
+    '<td class="px-4 py-3">' + esc(user.no_wa) + '</td>' +
+    '<td class="px-4 py-3">' + user.total_hit + '/' + user.limit_per_month + '</td>' +
+    '<td class="px-4 py-3 ' + (user.status === 'active' ? 'text-emerald-300' : 'text-rose-300') + '">' + esc(user.status) + '</td>' +
+    '<td class="px-4 py-3"><div class="flex justify-end gap-2">' +
+      '<button data-limit="' + user.id + '" class="px-3 py-1 rounded-lg border border-cyan-400/40 text-cyan-300">Set Limit</button>' +
+      '<button data-toggle="' + user.id + '" class="px-3 py-1 rounded-lg border border-amber-400/40 text-amber-300">Ban/Unban</button>' +
+      '<button data-remove="' + user.id + '" class="px-3 py-1 rounded-lg border border-rose-400/40 text-rose-300">Delete</button>' +
+    '</div></td></tr>'
+  ).join('') || '<tr><td colspan="6" class="px-4 py-10 text-center text-slate-400">Tidak ada user.</td></tr>';
+
+  document.getElementById('totalApi').textContent = state.gateways.length;
+  document.getElementById('totalUser').textContent = state.users.length;
+  document.getElementById('activeUser').textContent = state.users.filter((u) => u.status === 'active').length;
+}
+
+async function loadData() {
+  const [gRes, uRes] = await Promise.all([fetch('/api/admin/gateways'), fetch('/api/admin/users')]);
+  state.gateways = (await gRes.json()).items || [];
+  state.users = (await uRes.json()).items || [];
+  render();
+}
+
+searchInput.addEventListener('input', render);
+document.querySelectorAll('.tabBtn').forEach((btn) => btn.addEventListener('click', () => switchTab(btn.getAttribute('data-tab'))));
+
+document.getElementById('openModal').addEventListener('click', () => {
+  state.editingGateway = null;
+  keyInput.disabled = false;
+  keyInput.value = '';
+  urlInput.value = '';
+  document.getElementById('modalTitle').textContent = 'Add API Gateway';
+  gatewayModal.classList.remove('hidden');
+  gatewayModal.classList.add('flex');
+});
+
+document.getElementById('closeModal').addEventListener('click', () => {
+  gatewayModal.classList.add('hidden');
+  gatewayModal.classList.remove('flex');
+});
+
+document.getElementById('gatewayForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const endpoint = state.editingGateway ? '/api/admin/gateways/' + state.editingGateway : '/api/admin/gateways';
+  const method = state.editingGateway ? 'PUT' : 'POST';
+  const payload = state.editingGateway ? { target_url: urlInput.value } : { key: keyInput.value, target_url: urlInput.value };
+  const res = await fetch(endpoint, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+  if (!res.ok) {
+    alert('Gagal simpan gateway');
+    return;
+  }
+  gatewayModal.classList.add('hidden');
+  gatewayModal.classList.remove('flex');
+  await loadData();
+});
+
+gatewayBody.addEventListener('click', async (e) => {
+  const target = e.target;
+  if (!(target instanceof HTMLElement)) return;
+
+  const copy = target.getAttribute('data-copy');
+  const edit = target.getAttribute('data-edit');
+  const del = target.getAttribute('data-delete');
+
+  if (copy) {
+    const link = location.origin + '/api/gateway/' + copy;
+    await navigator.clipboard.writeText(link);
+    alert('Copied: ' + link);
+    return;
+  }
+
+  if (edit) {
+    const selected = state.gateways.find((g) => g.key === edit);
+    if (!selected) return;
+    state.editingGateway = selected.key;
+    keyInput.value = selected.key;
+    keyInput.disabled = true;
+    urlInput.value = selected.target_url;
+    document.getElementById('modalTitle').textContent = 'Edit API Gateway';
+    gatewayModal.classList.remove('hidden');
+    gatewayModal.classList.add('flex');
+    return;
+  }
+
+  if (del) {
+    if (!confirm('Delete gateway ' + del + '?')) return;
+    await fetch('/api/admin/gateways/' + del, { method: 'DELETE' });
+    await loadData();
+  }
+});
+
+userBody.addEventListener('click', async (e) => {
+  const target = e.target;
+  if (!(target instanceof HTMLElement)) return;
+
+  const idLimit = target.getAttribute('data-limit');
+  const idToggle = target.getAttribute('data-toggle');
+  const idRemove = target.getAttribute('data-remove');
+
+  if (idLimit) {
+    const next = prompt('Set limit per month:', '100');
+    if (!next) return;
+    const limit = Number(next);
+    if (!Number.isFinite(limit) || limit < 0) {
+      alert('Limit tidak valid');
+      return;
+    }
+    await fetch('/api/admin/users/' + idLimit, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ limit_per_month: limit }) });
+    await loadData();
+    return;
+  }
+
+  if (idToggle) {
+    await fetch('/api/admin/users/' + idToggle + '/toggle-status', { method: 'POST' });
+    await loadData();
+    return;
+  }
+
+  if (idRemove) {
+    if (!confirm('Delete user #' + idRemove + '?')) return;
+    await fetch('/api/admin/users/' + idRemove, { method: 'DELETE' });
+    await loadData();
+  }
+});
+
+switchTab('gateways');
+loadData();
+</script>
+</body>
+</html>`;
+
+const registerHtml = `<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Register API User</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="min-h-screen bg-slate-950 text-slate-100 p-6">
+  <div class="max-w-2xl mx-auto mt-8 bg-white/10 border border-cyan-400/20 backdrop-blur-2xl rounded-3xl p-8">
+    <p class="tracking-[0.28em] text-cyan-300 uppercase text-xs mb-2">V4API</p>
+    <h1 class="text-3xl font-bold mb-3">Daftar User API Gateway</h1>
+    <p class="text-slate-300 mb-6">Isi data kamu. Sistem akan otomatis generate API key unik.</p>
+    <form id="registerForm" class="space-y-4">
+      <input id="nama" required placeholder="Nama" class="w-full px-4 py-3 rounded-xl bg-slate-950/80 border border-white/20" />
+      <input id="email" type="email" required placeholder="Email" class="w-full px-4 py-3 rounded-xl bg-slate-950/80 border border-white/20" />
+      <input id="no_wa" required placeholder="No WA (contoh: 6281234567890)" class="w-full px-4 py-3 rounded-xl bg-slate-950/80 border border-white/20" />
+      <button class="w-full py-3 rounded-xl bg-gradient-to-r from-cyan-500 to-violet-600 font-semibold">Daftar Sekarang</button>
+    </form>
+
+    <div id="result" class="hidden mt-6 p-5 rounded-xl border border-emerald-400/30 bg-emerald-500/10">
+      <p class="text-emerald-300 font-semibold mb-2">Pendaftaran berhasil ✅</p>
+      <p class="text-sm text-slate-300">API Key Anda:</p>
+      <code id="apikey" class="block mt-2 px-3 py-2 rounded bg-slate-900 text-cyan-300"></code>
+      <p class="text-sm text-slate-300 mt-3">Gunakan endpoint:</p>
+      <code id="usage" class="block mt-2 px-3 py-2 rounded bg-slate-900 text-violet-300 break-all"></code>
+      <a id="dashboardLink" class="inline-block mt-4 px-4 py-2 rounded-lg border border-cyan-400/40 text-cyan-300">Buka User Dashboard</a>
+    </div>
+  </div>
+
+<script>
+document.getElementById('registerForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const payload = {
+    nama: document.getElementById('nama').value,
+    email: document.getElementById('email').value,
+    no_wa: document.getElementById('no_wa').value
+  };
+
+  const res = await fetch('/api/register', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    alert(data.error || 'Gagal daftar');
+    return;
+  }
+
+  const key = data.user.api_key;
+  document.getElementById('result').classList.remove('hidden');
+  document.getElementById('apikey').textContent = key;
+  document.getElementById('usage').textContent = location.origin + '/api/gateway/:key?apikey=' + key;
+  const dash = '/dashboard?apikey=' + encodeURIComponent(key);
+  document.getElementById('dashboardLink').href = dash;
+});
+</script>
+</body>
+</html>`;
+
+const dashboardHtml = `<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>User Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen p-6">
+  <div class="max-w-6xl mx-auto">
+    <header class="mb-8">
+      <p class="tracking-[0.3em] text-cyan-300 uppercase text-xs">User Console</p>
+      <h1 class="text-3xl font-bold">Dashboard Penggunaan API</h1>
+      <p class="text-slate-300">Contoh penggunaan: <code>https://v4api.ahem7553.workers.dev/api/gateway/:key?apikey=USER_KEY</code></p>
+    </header>
+
+    <section class="grid md:grid-cols-3 gap-4 mb-8">
+      <article class="bg-white/10 border border-white/10 rounded-2xl p-4 backdrop-blur-xl">
+        <p class="text-slate-300 text-sm">Nama</p>
+        <p id="nama" class="text-xl font-bold text-cyan-300">-</p>
+      </article>
+      <article class="bg-white/10 border border-white/10 rounded-2xl p-4 backdrop-blur-xl">
+        <p class="text-slate-300 text-sm">Kuota Tersisa</p>
+        <p id="sisa" class="text-xl font-bold text-emerald-300">-</p>
+      </article>
+      <article class="bg-white/10 border border-white/10 rounded-2xl p-4 backdrop-blur-xl">
+        <p class="text-slate-300 text-sm">Total Hit</p>
+        <p id="hit" class="text-xl font-bold text-violet-300">-</p>
+      </article>
+    </section>
+
+    <section class="bg-white/10 border border-white/10 rounded-2xl overflow-hidden backdrop-blur-xl">
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-900/70">
+            <tr>
+              <th class="px-4 py-3 text-left">Gateway Key</th>
+              <th class="px-4 py-3 text-left">Contoh URL</th>
+              <th class="px-4 py-3 text-right">Aksi</th>
+            </tr>
+          </thead>
+          <tbody id="gatewayList"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+<script>
+const apiKey = new URLSearchParams(location.search).get('apikey') || localStorage.getItem('apikey') || '';
+if (!apiKey) {
+  alert('apikey tidak ditemukan. Kembali ke halaman register.');
+  location.href = '/register';
+}
+localStorage.setItem('apikey', apiKey);
+
+const esc = (s) => String(s).replace(/[&<>\"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[ch]));
+const body = document.getElementById('gatewayList');
+
+async function load() {
+  const res = await fetch('/api/user/dashboard?apikey=' + encodeURIComponent(apiKey));
+  const data = await res.json();
+  if (!res.ok) {
+    alert(data.error || 'Gagal memuat dashboard');
+    return;
+  }
+
+  document.getElementById('nama').textContent = data.user.nama;
+  document.getElementById('sisa').textContent = String(data.user.remaining);
+  document.getElementById('hit').textContent = String(data.user.total_hit);
+
+  body.innerHTML = data.gateways.map((g) => {
+    const example = location.origin + '/api/gateway/' + g.key + '?apikey=' + apiKey;
+    return '<tr class="border-t border-white/10">' +
+      '<td class="px-4 py-3 text-cyan-300">' + esc(g.key) + '</td>' +
+      '<td class="px-4 py-3 break-all">' + esc(example) + '</td>' +
+      '<td class="px-4 py-3 text-right"><button data-copy="' + esc(example) + '" class="px-3 py-1 rounded-lg border border-cyan-400/40 text-cyan-300">Copy</button></td>' +
+    '</tr>';
+  }).join('') || '<tr><td colspan="3" class="px-4 py-8 text-center text-slate-400">Belum ada API tersedia.</td></tr>';
+}
+
+body.addEventListener('click', async (e) => {
+  const target = e.target;
+  if (!(target instanceof HTMLElement)) return;
+  const copy = target.getAttribute('data-copy');
+  if (!copy) return;
+  await navigator.clipboard.writeText(copy);
+  alert('URL copied!');
+});
+
+load();
+</script>
+</body>
+</html>`;
+
+const notFoundPage = (key: string) => `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<script src="https://cdn.tailwindcss.com"></script><title>Gateway Not Found</title></head>
+<body class="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4">
+  <div class="max-w-xl w-full bg-white/10 backdrop-blur-2xl border border-cyan-400/30 rounded-3xl p-8 shadow-2xl">
+    <p class="text-cyan-300 uppercase tracking-[0.3em] text-xs mb-3">Error 404</p>
+    <h1 class="text-3xl md:text-4xl font-bold text-white mb-3">Gateway key tidak ditemukan</h1>
+    <p class="text-slate-300 mb-6">Key <span class="text-violet-300 font-semibold">${key}</span> tidak tersedia pada bucket <strong>dataapi</strong>.</p>
+    <a href="/dashboard" class="inline-block px-5 py-3 rounded-xl bg-gradient-to-r from-cyan-500 to-violet-600 font-semibold">Buka User Dashboard</a>
+  </div>
+</body></html>`;
+
+app.get('/', (c) => c.redirect('/register'));
+app.get('/admin', (c) => c.html(adminHtml));
+app.get('/register', (c) => c.html(registerHtml));
+app.get('/dashboard', (c) => c.html(dashboardHtml));
+
+app.post('/api/register', async (c) => {
+  await ensureUsersTable(c.env.DB);
+  const body = await c.req.json<{ nama?: string; email?: string; no_wa?: string }>();
+
+  const nama = cleanText(body.nama ?? '');
+  const email = cleanText((body.email ?? '').toLowerCase());
+  const noWa = cleanText(body.no_wa ?? '');
+
+  if (!nama || !email || !noWa) {
+    return c.json({ error: 'nama, email, no_wa wajib diisi' }, 400);
+  }
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return c.json({ error: 'format email tidak valid' }, 400);
+  }
+
+  if (!/^[0-9]{9,16}$/.test(noWa)) {
+    return c.json({ error: 'format no_wa tidak valid' }, 400);
+  }
+
+  let apiKey = createApiKey();
+  let inserted = false;
+
+  for (let i = 0; i < 4 && !inserted; i++) {
+    try {
+      await c.env.DB.prepare('INSERT INTO users (nama, email, no_wa, api_key, limit_per_month, total_hit, status) VALUES (?, ?, ?, ?, ?, 0, ?)')
+        .bind(nama, email, noWa, apiKey, DEFAULT_LIMIT, 'active')
+        .run();
+      inserted = true;
+    } catch (error) {
+      const msg = String(error);
+      if (msg.includes('UNIQUE constraint failed: users.email')) {
+        return c.json({ error: 'Email sudah terdaftar' }, 409);
+      }
+      apiKey = createApiKey();
+      if (i === 3) return c.json({ error: 'Gagal membuat akun' }, 500);
+    }
+  }
+
+  const user = await getUserByApiKey(c.env.DB, apiKey);
+  return c.json({ success: true, user });
+});
+
+app.get('/api/user/dashboard', async (c) => {
+  await ensureUsersTable(c.env.DB);
+  const apiKey = parseApiKey(c);
+  if (!apiKey) return c.json({ error: 'apikey wajib diisi' }, 401);
+
+  const user = await getUserByApiKey(c.env.DB, apiKey);
+  if (!user) return c.json({ error: 'apikey tidak valid' }, 401);
+  if (user.status !== 'active') return c.json({ error: 'akun diblokir' }, 403);
+
+  const gateways = await listGateways(c.env.dataapi);
+  return c.json({
+    user: {
+      nama: user.nama,
+      email: user.email,
+      no_wa: user.no_wa,
+      limit_per_month: user.limit_per_month,
+      total_hit: user.total_hit,
+      remaining: Math.max(0, user.limit_per_month - user.total_hit)
+    },
+    gateways
+  });
+});
+
+app.get('/api/gateway/:key', async (c) => {
+  await ensureUsersTable(c.env.DB);
+  const key = cleanKey(c.req.param('key'));
+  if (!key) return c.json({ error: 'Invalid key format' }, 400);
+
+  const apiKey = parseApiKey(c);
+  if (!apiKey) return c.json({ error: 'Missing API key. Gunakan ?apikey= atau x-api-key header.' }, 401);
+
+  const user = await getUserByApiKey(c.env.DB, apiKey);
+  if (!user) return c.json({ error: 'API key tidak valid' }, 401);
+  if (user.status !== 'active') return c.json({ error: 'Akun user dibanned' }, 403);
+  if (user.total_hit >= user.limit_per_month) {
+    return c.json({ error: 'Limit bulanan habis', limit_per_month: user.limit_per_month, total_hit: user.total_hit }, 429);
+  }
+
+  const item = await c.env.dataapi.get(objectName(key));
+  if (!item) return c.html(notFoundPage(key), 404);
+
+  const gateway = (await item.json()) as GatewayRecord;
+  let target: URL;
+  try {
+    target = new URL(gateway.target_url);
+  } catch {
+    return c.json({ error: 'Stored target_url is invalid' }, 500);
+  }
+
+  const sourceUrl = new URL(c.req.url);
+  sourceUrl.searchParams.forEach((value, name) => {
+    if (name.toLowerCase() === 'apikey') return;
+    target.searchParams.append(name, value);
+  });
+
+  await c.env.DB.prepare('UPDATE users SET total_hit = total_hit + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?').bind(user.id).run();
+
+  const proxyResponse = await fetch(target.toString(), {
+    method: 'GET',
+    headers: {
+      accept: c.req.header('accept') ?? '*/*',
+      'user-agent': c.req.header('user-agent') ?? 'cloudflare-worker-gateway'
+    }
+  });
+
+  return new Response(proxyResponse.body, {
+    status: proxyResponse.status,
+    headers: proxyResponse.headers
+  });
+});
+
+app.use('/api/admin/*', async (c, next) => {
+  if (!c.env.ADMIN_TOKEN) return next();
+
+  const token = c.req.header('x-admin-token') ?? c.req.header('authorization')?.replace('Bearer ', '');
+  if (token !== c.env.ADMIN_TOKEN) return c.json({ error: 'Unauthorized' }, 401);
+  await next();
+});
+
+app.get('/api/admin/gateways', async (c) => c.json({ items: await listGateways(c.env.dataapi) }));
+
+app.post('/api/admin/gateways', async (c) => {
+  const body = await c.req.json<{ key?: string; target_url?: string }>();
+  const key = cleanKey(body.key ?? '');
+  const targetUrl = cleanText(body.target_url ?? '');
+
+  if (!key || !targetUrl) return c.json({ error: 'key and target_url are required' }, 400);
+
+  let parsed: URL;
+  try {
+    parsed = new URL(targetUrl);
+  } catch {
+    return c.json({ error: 'target_url must be a valid URL' }, 400);
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) return c.json({ error: 'Only http/https URLs are allowed' }, 400);
+
+  const now = new Date().toISOString();
+  const existing = await c.env.dataapi.get(objectName(key));
+  const existingData = existing ? ((await existing.json()) as Partial<GatewayRecord>) : null;
+
+  const record: GatewayRecord = {
+    key,
+    target_url: targetUrl,
+    created_at: existingData?.created_at ?? now,
+    updated_at: now
+  };
+
+  await c.env.dataapi.put(objectName(key), JSON.stringify(record), { httpMetadata: { contentType: 'application/json' } });
+  return c.json({ success: true, item: record });
+});
+
+app.put('/api/admin/gateways/:key', async (c) => {
+  const key = cleanKey(c.req.param('key'));
+  const body = await c.req.json<{ target_url?: string }>();
+  const targetUrl = cleanText(body.target_url ?? '');
+  if (!key || !targetUrl) return c.json({ error: 'key and target_url are required' }, 400);
+
+  const existing = await c.env.dataapi.get(objectName(key));
+  if (!existing) return c.json({ error: 'Gateway key not found' }, 404);
+
+  const oldRecord = (await existing.json()) as GatewayRecord;
+  const record: GatewayRecord = { key, target_url: targetUrl, created_at: oldRecord.created_at, updated_at: new Date().toISOString() };
+
+  await c.env.dataapi.put(objectName(key), JSON.stringify(record), { httpMetadata: { contentType: 'application/json' } });
+  return c.json({ success: true, item: record });
+});
+
+app.delete('/api/admin/gateways/:key', async (c) => {
+  const key = cleanKey(c.req.param('key'));
+  if (!key) return c.json({ error: 'Invalid key' }, 400);
+  await c.env.dataapi.delete(objectName(key));
+  return c.json({ success: true });
+});
+
+app.get('/api/admin/users', async (c) => {
+  await ensureUsersTable(c.env.DB);
+  const rows = await c.env.DB.prepare('SELECT id, nama, email, no_wa, api_key, limit_per_month, total_hit, status FROM users ORDER BY id DESC').all<UserRecord>();
+  return c.json({ items: rows.results ?? [] });
+});
+
+app.patch('/api/admin/users/:id', async (c) => {
+  await ensureUsersTable(c.env.DB);
+  const id = Number(c.req.param('id'));
+  const body = await c.req.json<{ limit_per_month?: number; status?: 'active' | 'banned' }>();
+  const updates: string[] = [];
+  const values: unknown[] = [];
+
+  if (typeof body.limit_per_month === 'number' && Number.isFinite(body.limit_per_month) && body.limit_per_month >= 0) {
+    updates.push('limit_per_month = ?');
+    values.push(Math.floor(body.limit_per_month));
+  }
+
+  if (body.status === 'active' || body.status === 'banned') {
+    updates.push('status = ?');
+    values.push(body.status);
+  }
+
+  if (!updates.length) return c.json({ error: 'No valid fields to update' }, 400);
+  values.push(id);
+
+  await c.env.DB.prepare(`UPDATE users SET ${updates.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(...values).run();
+  return c.json({ success: true });
+});
+
+app.post('/api/admin/users/:id/toggle-status', async (c) => {
+  await ensureUsersTable(c.env.DB);
+  const id = Number(c.req.param('id'));
+  const user = await c.env.DB.prepare('SELECT status FROM users WHERE id = ?').bind(id).first<{ status: 'active' | 'banned' }>();
+  if (!user) return c.json({ error: 'User not found' }, 404);
+  const nextStatus = user.status === 'active' ? 'banned' : 'active';
+  await c.env.DB.prepare('UPDATE users SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').bind(nextStatus, id).run();
+  return c.json({ success: true, status: nextStatus });
+});
+
+app.delete('/api/admin/users/:id', async (c) => {
+  await ensureUsersTable(c.env.DB);
+  const id = Number(c.req.param('id'));
+  await c.env.DB.prepare('DELETE FROM users WHERE id = ?').bind(id).run();
+  return c.json({ success: true });
+});
+
+app.notFound((c) => c.html(notFoundPage('unknown'), 404));
+
+export default app;
