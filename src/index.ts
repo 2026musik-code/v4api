@@ -588,16 +588,46 @@ const dashboardHtml = `<!DOCTYPE html>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>User Dashboard</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .v3-logo {
+      font-weight: 900;
+      background: linear-gradient(to bottom, #fff 10%, #fbbf24 30%, #f59e0b 60%, #ef4444 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      display: inline-block;
+    }
+
+    .logo-fire {
+      animation: fireFlicker 0.4s ease-in-out infinite alternate;
+      transform-origin: center bottom;
+      filter: drop-shadow(0 0 12px rgba(245, 158, 11, 0.6));
+    }
+
+    @keyframes fireFlicker {
+      0% {
+        transform: scaleY(1) scaleX(1) skewX(0deg);
+        filter: brightness(1) drop-shadow(0 0 8px rgba(255, 100, 0, 0.8));
+      }
+
+      25% {
+        transform: scaleY(1.1) scaleX(0.9) skewX(3deg);
+        filter: brightness(1.2) drop-shadow(0 0 15px rgba(255, 200, 0, 0.9));
+      }
+
+      100% {
+        transform: scaleY(0.98) scaleX(1.02) skewX(-1deg);
+        filter: brightness(1.1) drop-shadow(0 0 10px rgba(255, 150, 0, 0.8));
+      }
+    }
+  </style>
 </head>
-<body class="bg-slate-950 text-slate-100 min-h-screen p-6">
+<body class="bg-slate-950 text-slate-100 min-h-screen p-4 sm:p-6">
   <div class="max-w-6xl mx-auto">
-    <header class="mb-8 flex items-start justify-between gap-4">
-      <div>
-        <p class="tracking-[0.3em] text-cyan-300 uppercase text-xs">User Console</p>
-        <h1 class="text-3xl font-bold">Dashboard Penggunaan API</h1>
-        <p class="text-slate-300">Contoh penggunaan: <code>https://v4api.ahem7553.workers.dev/api/gateway/:key?apikey=USER_KEY</code></p>
+    <header class="mb-8 flex items-start justify-between gap-3 sm:gap-4">
+      <div class="min-w-0">
+        <h1 class="v3-logo logo-fire text-3xl sm:text-4xl leading-tight">V3 API</h1>
       </div>
-      <button id="logoutBtn" class="px-4 py-2 rounded-xl border border-rose-400/40 text-rose-300">Logout</button>
+      <button id="logoutBtn" class="shrink-0 px-3 py-2 sm:px-4 rounded-xl border border-rose-400/40 text-rose-300">Logout</button>
     </header>
 
     <section class="grid md:grid-cols-3 gap-4 mb-8">
