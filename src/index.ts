@@ -14,6 +14,11 @@ type GatewayRecord = {
   updated_at: string;
 };
 
+type PopularGateway = {
+  gateway_key: string;
+  total_hit: number;
+};
+
 type UserRecord = {
   id: number;
   nama: string;
@@ -55,6 +60,12 @@ const ensureUsersTable = async (db: D1Database) => {
     )
     .run();
   await db.prepare('CREATE INDEX IF NOT EXISTS idx_users_api_key ON users(api_key)').run();
+  await db
+    .prepare(
+      'CREATE TABLE IF NOT EXISTS gateway_hits (id INTEGER PRIMARY KEY AUTOINCREMENT, gateway_key TEXT NOT NULL UNIQUE, total_hit INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)'
+    )
+    .run();
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_gateway_hits_total_hit ON gateway_hits(total_hit DESC)').run();
 
   userTableInitialized = true;
 };
@@ -169,6 +180,13 @@ const adminHtml = `<!DOCTYPE html>
       </article>
     </section>
 
+    <section class="bg-slate-900/35 backdrop-blur-xl border-2 border-cyan-400/70 rounded-2xl p-5 mb-6">
+      <h2 class="text-lg font-bold text-cyan-200 mb-4">🔥 Top Gateway Traffic</h2>
+      <div id="topTrafficList" class="space-y-3">
+        <p class="text-slate-400 text-sm">Belum ada data traffic.</p>
+      </div>
+    </section>
+
     <section class="mb-4 flex gap-2">
       <button data-tab="gateways" class="tabBtn px-4 py-2 rounded-xl bg-cyan-500/20 border border-cyan-400/40">Manage Gateways</button>
       <button data-tab="users" class="tabBtn px-4 py-2 rounded-xl border border-white/20">Manage Users</button>
@@ -239,7 +257,7 @@ const adminHtml = `<!DOCTYPE html>
   </div>
 
 <script>
-const state = { gateways: [], users: [], tab: 'gateways', editingGateway: null };
+const state = { gateways: [], users: [], popular: [], tab: 'gateways', editingGateway: null };
 const gatewayBody = document.getElementById('gatewayBody');
 const userBody = document.getElementById('userBody');
 const searchInput = document.getElementById('searchInput');
@@ -248,6 +266,7 @@ const userPanel = document.getElementById('userPanel');
 const gatewayModal = document.getElementById('gatewayModal');
 const keyInput = document.getElementById('keyInput');
 const urlInput = document.getElementById('urlInput');
+const topTrafficList = document.getElementById('topTrafficList');
 const adminApp = document.getElementById('adminApp');
 const adminLock = document.getElementById('adminLock');
 const adminLoginForm = document.getElementById('adminLoginForm');
@@ -316,17 +335,33 @@ function render() {
     '</div></td></tr>'
   ).join('') || '<tr><td colspan="6" class="px-4 py-10 text-center text-slate-400">Tidak ada user.</td></tr>';
 
+  const maxHit = state.popular.length ? Math.max(...state.popular.map((p) => p.total_hit), 1) : 1;
+  topTrafficList.innerHTML = state.popular.map((item) => {
+    const pct = Math.max(6, Math.round((item.total_hit / maxHit) * 100));
+    return '<div class="rounded-xl border border-cyan-400/35 bg-slate-900/50 p-3">' +
+      '<div class="flex justify-between text-sm mb-2">' +
+        '<span class="text-cyan-200 font-semibold break-all">' + esc(item.gateway_key) + '</span>' +
+        '<span class="text-amber-200 font-semibold">' + item.total_hit + ' hit</span>' +
+      '</div>' +
+      '<div class="h-2 rounded-full bg-slate-800 overflow-hidden">' +
+        '<div class="h-full bg-cyan-400" style="width:' + pct + '%"></div>' +
+      '</div>' +
+    '</div>';
+  }).join('') || '<p class="text-slate-400 text-sm">Belum ada data traffic.</p>';
+
   document.getElementById('totalApi').textContent = state.gateways.length;
   document.getElementById('totalUser').textContent = state.users.length;
   document.getElementById('activeUser').textContent = state.users.filter((u) => u.status === 'active').length;
 }
 
 async function loadData() {
-  const [gRes, uRes] = await Promise.all([adminFetch('/api/admin/gateways'), adminFetch('/api/admin/users')]);
+  const [gRes, uRes, pRes] = await Promise.all([adminFetch('/api/admin/gateways'), adminFetch('/api/admin/users'), adminFetch('/api/admin/stats/popular')]);
   const gData = await gRes.json();
   const uData = await uRes.json();
+  const pData = await pRes.json();
   state.gateways = gData.items || [];
   state.users = uData.items || [];
+  state.popular = pData.items || [];
   render();
 }
 
@@ -968,6 +1003,10 @@ app.get('/api/gateway/:key', async (c) => {
   });
 
   await c.env.DB.prepare('UPDATE users SET total_hit = total_hit + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?').bind(user.id).run();
+  await c.env.DB
+    .prepare('INSERT INTO gateway_hits (gateway_key, total_hit, updated_at) VALUES (?, 1, CURRENT_TIMESTAMP) ON CONFLICT(gateway_key) DO UPDATE SET total_hit = total_hit + 1, updated_at = CURRENT_TIMESTAMP')
+    .bind(key)
+    .run();
 
   const proxyResponse = await fetch(target.toString(), {
     method: 'GET',
@@ -992,6 +1031,15 @@ app.use('/api/admin/*', async (c, next) => {
 });
 
 app.get('/api/admin/gateways', async (c) => c.json({ items: await listGateways(c.env.dataapi) }));
+
+app.get('/api/admin/stats/popular', async (c) => {
+  await ensureUsersTable(c.env.DB);
+  const rows = await c.env.DB
+    .prepare('SELECT gateway_key, total_hit FROM gateway_hits ORDER BY total_hit DESC, gateway_key ASC LIMIT 5')
+    .all<PopularGateway>();
+
+  return c.json({ items: rows.results ?? [] });
+});
 
 app.post('/api/admin/gateways', async (c) => {
   const body = await c.req.json<{ key?: string; target_url?: string }>();
