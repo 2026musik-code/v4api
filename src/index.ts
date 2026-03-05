@@ -113,16 +113,41 @@ const adminHtml = `<!DOCTYPE html>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>API Gateway Admin</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .v3-logo {
+      font-weight: 900;
+      background: linear-gradient(to bottom, #fff 10%, #fbbf24 30%, #f59e0b 60%, #ef4444 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      display: inline-block;
+    }
+
+    .logo-fire {
+      animation: fireFlicker 0.4s ease-in-out infinite alternate;
+      transform-origin: center bottom;
+      filter: drop-shadow(0 0 12px rgba(245, 158, 11, 0.6));
+    }
+
+    @keyframes fireFlicker {
+      0% { transform: scaleY(1) scaleX(1) skewX(0deg); filter: brightness(1) drop-shadow(0 0 8px rgba(255, 100, 0, 0.8)); }
+      25% { transform: scaleY(1.1) scaleX(0.9) skewX(3deg); filter: brightness(1.2) drop-shadow(0 0 15px rgba(255, 200, 0, 0.9)); }
+      100% { transform: scaleY(0.98) scaleX(1.02) skewX(-1deg); filter: brightness(1.1) drop-shadow(0 0 10px rgba(255, 150, 0, 0.8)); }
+    }
+  </style>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen">
   <div class="absolute inset-0 bg-[radial-gradient(circle_at_top_right,#22d3ee22,transparent_40%),radial-gradient(circle_at_bottom_left,#a855f722,transparent_45%)] pointer-events-none"></div>
   <main id="adminApp" class="hidden relative z-10 max-w-6xl mx-auto p-6 md:p-10">
-    <header class="mb-8 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-      <div>
-        <p class="text-cyan-300 tracking-[0.25em] uppercase text-xs">Cloudflare Worker</p>
-        <h1 class="text-3xl md:text-4xl font-bold">Luxury API Gateway Dashboard</h1>
+    <header class="mb-8 flex items-start justify-between gap-3 sm:gap-4">
+      <div class="logo-fire flex items-center gap-3 min-w-0">
+        <svg viewBox="0 0 24 24" class="w-8 h-8 sm:w-10 sm:h-10 shrink-0" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M13.5 2.8c.2 2.3-.6 3.9-2.2 5.7-1 1.1-1.7 2.2-1.7 3.8 0 1.8 1.3 3.2 3.2 3.2 2.5 0 4-2 4-4.6 0-2-1-3.8-3.3-8.1Z" fill="#fb923c"/>
+          <path d="M9.4 13.5c-1.3 1.1-2.2 2.5-2.2 4.3 0 2.6 2 4.4 4.8 4.4 3.7 0 6-2.8 6-6.5 0-2.2-.9-4.2-2.6-6.1.2 3.2-1.2 5.3-3.6 5.3-1 0-1.8-.5-2.4-1.4Z" fill="#ef4444"/>
+          <path d="M12.2 16.7c-1.1 1-1.6 1.8-1.6 2.8 0 1.3 1 2.2 2.4 2.2 1.8 0 3.1-1.3 3.1-3.1 0-1-.4-2-1.2-2.9-.2 1-.9 1.8-2 1.8-.3 0-.5-.1-.7-.2Z" fill="#fde68a"/>
+        </svg>
+        <h1 class="v3-logo text-3xl sm:text-4xl leading-tight">V3 API</h1>
       </div>
-      <div class="flex gap-2">
+      <div class="flex gap-2 flex-wrap justify-end">
         <a href="/register" class="px-4 py-3 rounded-xl border border-cyan-400/40 text-cyan-300">Register User</a>
         <button id="logoutAdmin" class="px-4 py-3 rounded-xl border border-rose-400/40 text-rose-300">Logout Admin</button>
         <button id="openModal" class="px-5 py-3 rounded-xl bg-gradient-to-r from-cyan-500 to-violet-600 font-semibold">+ Add API</button>
@@ -149,14 +174,14 @@ const adminHtml = `<!DOCTYPE html>
       <button data-tab="users" class="tabBtn px-4 py-2 rounded-xl border border-white/20">Manage Users</button>
     </section>
 
-    <section class="bg-white/10 backdrop-blur-xl border border-white/10 rounded-2xl p-4 mb-4">
+    <section class="bg-slate-900/40 backdrop-blur-xl border-2 border-cyan-400/70 rounded-2xl p-4 mb-4">
       <input id="searchInput" class="w-full bg-slate-900/70 border border-cyan-400/30 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-cyan-400" placeholder="Cari gateway key atau email user" />
     </section>
 
-    <section id="gatewayPanel" class="bg-white/10 backdrop-blur-xl border border-white/10 rounded-2xl overflow-hidden">
+    <section id="gatewayPanel" class="bg-slate-900/35 backdrop-blur-xl border-2 border-amber-300/60 rounded-2xl overflow-hidden">
       <div class="overflow-x-auto">
         <table class="w-full text-sm">
-          <thead class="bg-slate-900/60 text-slate-300">
+          <thead class="bg-slate-900/70 text-slate-200 border-b-2 border-cyan-400/70">
             <tr>
               <th class="text-left px-4 py-3">Key</th>
               <th class="text-left px-4 py-3">Target URL</th>
@@ -169,10 +194,10 @@ const adminHtml = `<!DOCTYPE html>
       </div>
     </section>
 
-    <section id="userPanel" class="hidden bg-white/10 backdrop-blur-xl border border-white/10 rounded-2xl overflow-hidden">
+    <section id="userPanel" class="hidden bg-slate-900/35 backdrop-blur-xl border-2 border-amber-300/60 rounded-2xl overflow-hidden">
       <div class="overflow-x-auto">
         <table class="w-full text-sm">
-          <thead class="bg-slate-900/60 text-slate-300">
+          <thead class="bg-slate-900/70 text-slate-200 border-b-2 border-cyan-400/70">
             <tr>
               <th class="text-left px-4 py-3">Nama</th>
               <th class="text-left px-4 py-3">Email</th>
@@ -266,7 +291,7 @@ function render() {
   const userFiltered = state.users.filter((u) => (u.nama + ' ' + u.email + ' ' + u.no_wa).toLowerCase().includes(q));
 
   gatewayBody.innerHTML = gatewayFiltered.map((item) =>
-    '<tr class="border-t border-white/10">' +
+    '<tr class="border-t border-cyan-400/30 hover:bg-cyan-500/5 transition-colors">' +
     '<td class="px-4 py-3 text-cyan-300 font-semibold">' + esc(item.key) + '</td>' +
     '<td class="px-4 py-3">' + esc(item.target_url) + '</td>' +
     '<td class="px-4 py-3 text-slate-400">' + new Date(item.updated_at).toLocaleString('id-ID') + '</td>' +
@@ -278,7 +303,7 @@ function render() {
   ).join('') || '<tr><td colspan="4" class="px-4 py-10 text-center text-slate-400">Tidak ada gateway.</td></tr>';
 
   userBody.innerHTML = userFiltered.map((user) =>
-    '<tr class="border-t border-white/10">' +
+    '<tr class="border-t border-cyan-400/30 hover:bg-cyan-500/5 transition-colors">' +
     '<td class="px-4 py-3">' + esc(user.nama) + '</td>' +
     '<td class="px-4 py-3">' + esc(user.email) + '</td>' +
     '<td class="px-4 py-3">' + esc(user.no_wa) + '</td>' +
@@ -604,33 +629,27 @@ const dashboardHtml = `<!DOCTYPE html>
     }
 
     @keyframes fireFlicker {
-      0% {
-        transform: scaleY(1) scaleX(1) skewX(0deg);
-        filter: brightness(1) drop-shadow(0 0 8px rgba(255, 100, 0, 0.8));
-      }
-
-      25% {
-        transform: scaleY(1.1) scaleX(0.9) skewX(3deg);
-        filter: brightness(1.2) drop-shadow(0 0 15px rgba(255, 200, 0, 0.9));
-      }
-
-      100% {
-        transform: scaleY(0.98) scaleX(1.02) skewX(-1deg);
-        filter: brightness(1.1) drop-shadow(0 0 10px rgba(255, 150, 0, 0.8));
-      }
+      0% { transform: scaleY(1) scaleX(1) skewX(0deg); filter: brightness(1) drop-shadow(0 0 8px rgba(255, 100, 0, 0.8)); }
+      25% { transform: scaleY(1.1) scaleX(0.9) skewX(3deg); filter: brightness(1.2) drop-shadow(0 0 15px rgba(255, 200, 0, 0.9)); }
+      100% { transform: scaleY(0.98) scaleX(1.02) skewX(-1deg); filter: brightness(1.1) drop-shadow(0 0 10px rgba(255, 150, 0, 0.8)); }
     }
   </style>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen p-4 sm:p-6">
   <div class="max-w-6xl mx-auto">
-    <header class="mb-8 flex items-start justify-between gap-3 sm:gap-4">
-      <div class="min-w-0">
-        <h1 class="v3-logo logo-fire text-3xl sm:text-4xl leading-tight">V3 API</h1>
+    <header class="mb-6 flex items-start justify-between gap-3 sm:gap-4">
+      <div class="logo-fire flex items-center gap-3 min-w-0">
+        <svg viewBox="0 0 24 24" class="w-8 h-8 sm:w-10 sm:h-10 shrink-0" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M13.5 2.8c.2 2.3-.6 3.9-2.2 5.7-1 1.1-1.7 2.2-1.7 3.8 0 1.8 1.3 3.2 3.2 3.2 2.5 0 4-2 4-4.6 0-2-1-3.8-3.3-8.1Z" fill="#fb923c"/>
+          <path d="M9.4 13.5c-1.3 1.1-2.2 2.5-2.2 4.3 0 2.6 2 4.4 4.8 4.4 3.7 0 6-2.8 6-6.5 0-2.2-.9-4.2-2.6-6.1.2 3.2-1.2 5.3-3.6 5.3-1 0-1.8-.5-2.4-1.4Z" fill="#ef4444"/>
+          <path d="M12.2 16.7c-1.1 1-1.6 1.8-1.6 2.8 0 1.3 1 2.2 2.4 2.2 1.8 0 3.1-1.3 3.1-3.1 0-1-.4-2-1.2-2.9-.2 1-.9 1.8-2 1.8-.3 0-.5-.1-.7-.2Z" fill="#fde68a"/>
+        </svg>
+        <h1 class="v3-logo text-3xl sm:text-4xl leading-tight">V3 API</h1>
       </div>
       <button id="logoutBtn" class="shrink-0 px-3 py-2 sm:px-4 rounded-xl border border-rose-400/40 text-rose-300">Logout</button>
     </header>
 
-    <section class="grid md:grid-cols-3 gap-4 mb-8">
+    <section class="grid md:grid-cols-3 gap-4 mb-6">
       <article class="bg-white/10 border border-white/10 rounded-2xl p-4 backdrop-blur-xl">
         <p class="text-slate-300 text-sm">Nama</p>
         <p id="nama" class="text-xl font-bold text-cyan-300">-</p>
@@ -645,20 +664,12 @@ const dashboardHtml = `<!DOCTYPE html>
       </article>
     </section>
 
-    <section class="bg-white/10 border border-white/10 rounded-2xl overflow-hidden backdrop-blur-xl">
-      <div class="overflow-x-auto">
-        <table class="w-full text-sm">
-          <thead class="bg-slate-900/70">
-            <tr>
-              <th class="px-4 py-3 text-left">Gateway Key</th>
-              <th class="px-4 py-3 text-left">Contoh URL</th>
-              <th class="px-4 py-3 text-right">Aksi</th>
-            </tr>
-          </thead>
-          <tbody id="gatewayList"></tbody>
-        </table>
-      </div>
+    <section class="mb-3 border-2 border-cyan-400/70 bg-slate-900/40 backdrop-blur-xl rounded-2xl p-4 flex items-center justify-between">
+      <h2 class="text-sm sm:text-base font-semibold text-cyan-200 tracking-wide">API Gateway List</h2>
+      <span class="text-xs sm:text-sm text-amber-300">Kotak Data API</span>
     </section>
+
+    <section id="gatewayList" class="space-y-3"></section>
   </div>
 
 <script>
@@ -673,7 +684,7 @@ document.getElementById('logoutBtn').addEventListener('click', () => {
   location.href = '/login';
 });
 
-const esc = (s) => String(s).replace(/[&<>\"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[ch]));
+const esc = (s) => String(s).replace(/[&<>"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 const body = document.getElementById('gatewayList');
 
 async function load() {
@@ -690,12 +701,14 @@ async function load() {
 
   body.innerHTML = data.gateways.map((g) => {
     const example = location.origin + '/api/gateway/' + g.key + '?apikey=' + apiKey;
-    return '<tr class="border-t border-white/10">' +
-      '<td class="px-4 py-3 text-cyan-300">' + esc(g.key) + '</td>' +
-      '<td class="px-4 py-3 break-all">' + esc(example) + '</td>' +
-      '<td class="px-4 py-3 text-right"><button data-copy="' + esc(example) + '" class="px-3 py-1 rounded-lg border border-cyan-400/40 text-cyan-300">Copy</button></td>' +
-    '</tr>';
-  }).join('') || '<tr><td colspan="3" class="px-4 py-8 text-center text-slate-400">Belum ada API tersedia.</td></tr>';
+    return '<article class="group border border-cyan-400/45 hover:border-amber-300/80 transition rounded-2xl bg-slate-900/40 p-4">' +
+      '<div class="space-y-2 text-sm">' +
+        '<p><span class="text-cyan-300 font-semibold">Gateway Key:</span> <span class="text-slate-200 break-all">' + esc(g.key) + '</span></p>' +
+        '<p><span class="text-amber-300 font-semibold">Target URL:</span> <span class="text-slate-300 break-all">' + esc(example) + '</span></p>' +
+      '</div>' +
+      '<button data-copy="' + esc(example) + '" class="mt-3 w-full px-3 py-2 rounded-xl border border-cyan-400/50 hover:border-amber-300/90 text-cyan-200 hover:text-amber-200 transition">Copy API Link</button>' +
+    '</article>';
+  }).join('') || '<article class="border border-cyan-400/40 rounded-2xl bg-slate-900/30 p-6 text-center text-slate-400">Belum ada API tersedia.</article>';
 }
 
 body.addEventListener('click', async (e) => {
