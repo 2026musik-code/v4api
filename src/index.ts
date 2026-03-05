@@ -628,6 +628,14 @@ const dashboardHtml = `<!DOCTYPE html>
       filter: drop-shadow(0 0 12px rgba(245, 158, 11, 0.6));
     }
 
+    .sidebar-overlay {
+      transition: opacity 0.25s ease;
+    }
+
+    .sidebar-panel {
+      transition: transform 0.3s ease;
+    }
+
     @keyframes fireFlicker {
       0% { transform: scaleY(1) scaleX(1) skewX(0deg); filter: brightness(1) drop-shadow(0 0 8px rgba(255, 100, 0, 0.8)); }
       25% { transform: scaleY(1.1) scaleX(0.9) skewX(3deg); filter: brightness(1.2) drop-shadow(0 0 15px rgba(255, 200, 0, 0.9)); }
@@ -636,15 +644,24 @@ const dashboardHtml = `<!DOCTYPE html>
   </style>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen p-4 sm:p-6">
-  <div class="max-w-6xl mx-auto">
+  <div class="max-w-6xl mx-auto relative">
     <header class="mb-6 flex items-start justify-between gap-3 sm:gap-4">
-      <div class="logo-fire flex items-center gap-3 min-w-0">
-        <svg viewBox="0 0 24 24" class="w-8 h-8 sm:w-10 sm:h-10 shrink-0" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-          <path d="M13.5 2.8c.2 2.3-.6 3.9-2.2 5.7-1 1.1-1.7 2.2-1.7 3.8 0 1.8 1.3 3.2 3.2 3.2 2.5 0 4-2 4-4.6 0-2-1-3.8-3.3-8.1Z" fill="#fb923c"/>
-          <path d="M9.4 13.5c-1.3 1.1-2.2 2.5-2.2 4.3 0 2.6 2 4.4 4.8 4.4 3.7 0 6-2.8 6-6.5 0-2.2-.9-4.2-2.6-6.1.2 3.2-1.2 5.3-3.6 5.3-1 0-1.8-.5-2.4-1.4Z" fill="#ef4444"/>
-          <path d="M12.2 16.7c-1.1 1-1.6 1.8-1.6 2.8 0 1.3 1 2.2 2.4 2.2 1.8 0 3.1-1.3 3.1-3.1 0-1-.4-2-1.2-2.9-.2 1-.9 1.8-2 1.8-.3 0-.5-.1-.7-.2Z" fill="#fde68a"/>
-        </svg>
-        <h1 class="v3-logo text-3xl sm:text-4xl leading-tight">V3 API</h1>
+      <div class="flex items-center gap-3 min-w-0">
+        <button id="menuBtn" aria-label="Buka menu" class="shrink-0 p-2.5 rounded-xl border border-cyan-400/50 bg-slate-900/40 hover:border-cyan-300 transition">
+          <span id="menuIcon" class="block transition-transform duration-300">
+            <svg viewBox="0 0 24 24" class="w-6 h-6 text-cyan-200" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </span>
+        </button>
+        <div class="logo-fire flex items-center gap-3 min-w-0">
+          <svg viewBox="0 0 24 24" class="w-8 h-8 sm:w-10 sm:h-10 shrink-0" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M13.5 2.8c.2 2.3-.6 3.9-2.2 5.7-1 1.1-1.7 2.2-1.7 3.8 0 1.8 1.3 3.2 3.2 3.2 2.5 0 4-2 4-4.6 0-2-1-3.8-3.3-8.1Z" fill="#fb923c"/>
+            <path d="M9.4 13.5c-1.3 1.1-2.2 2.5-2.2 4.3 0 2.6 2 4.4 4.8 4.4 3.7 0 6-2.8 6-6.5 0-2.2-.9-4.2-2.6-6.1.2 3.2-1.2 5.3-3.6 5.3-1 0-1.8-.5-2.4-1.4Z" fill="#ef4444"/>
+            <path d="M12.2 16.7c-1.1 1-1.6 1.8-1.6 2.8 0 1.3 1 2.2 2.4 2.2 1.8 0 3.1-1.3 3.1-3.1 0-1-.4-2-1.2-2.9-.2 1-.9 1.8-2 1.8-.3 0-.5-.1-.7-.2Z" fill="#fde68a"/>
+          </svg>
+          <h1 class="v3-logo text-3xl sm:text-4xl leading-tight">V3 API</h1>
+        </div>
       </div>
       <button id="logoutBtn" class="shrink-0 px-3 py-2 sm:px-4 rounded-xl border border-rose-400/40 text-rose-300">Logout</button>
     </header>
@@ -672,12 +689,58 @@ const dashboardHtml = `<!DOCTYPE html>
     <section id="gatewayList" class="space-y-3"></section>
   </div>
 
+  <div id="menuOverlay" class="sidebar-overlay fixed inset-0 bg-black/50 backdrop-blur-[1px] opacity-0 pointer-events-none z-30"></div>
+  <aside id="sidebar" class="sidebar-panel fixed left-0 top-0 h-full w-[85%] max-w-sm bg-slate-900/85 border-r border-cyan-400/40 backdrop-blur-2xl p-5 z-40 -translate-x-full">
+    <div class="flex items-center justify-between mb-6">
+      <div class="logo-fire flex items-center gap-2">
+        <svg viewBox="0 0 24 24" class="w-6 h-6" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M13.5 2.8c.2 2.3-.6 3.9-2.2 5.7-1 1.1-1.7 2.2-1.7 3.8 0 1.8 1.3 3.2 3.2 3.2 2.5 0 4-2 4-4.6 0-2-1-3.8-3.3-8.1Z" fill="#fb923c"/>
+          <path d="M9.4 13.5c-1.3 1.1-2.2 2.5-2.2 4.3 0 2.6 2 4.4 4.8 4.4 3.7 0 6-2.8 6-6.5 0-2.2-.9-4.2-2.6-6.1.2 3.2-1.2 5.3-3.6 5.3-1 0-1.8-.5-2.4-1.4Z" fill="#ef4444"/>
+        </svg>
+        <span class="v3-logo text-xl">V3 API</span>
+      </div>
+      <button id="closeMenuBtn" class="px-3 py-1.5 rounded-lg border border-white/20 text-slate-200">✕</button>
+    </div>
+
+    <nav class="space-y-3">
+      <a href="#" class="flex items-center gap-3 px-4 py-3 rounded-xl border border-cyan-400/40 bg-slate-900/50 hover:border-cyan-300 transition">
+        <span>👤</span><span>Akun Saya</span>
+      </a>
+      <a href="#" class="flex items-center gap-3 px-4 py-3 rounded-xl border border-cyan-400/40 bg-slate-900/50 hover:border-cyan-300 transition">
+        <span>📘</span><span>Dokumentasi</span>
+      </a>
+      <a href="#" class="flex items-center gap-3 px-4 py-3 rounded-xl border border-amber-300/70 bg-gradient-to-r from-amber-500/20 to-violet-500/20 hover:border-amber-200 transition text-amber-200 font-semibold">
+        <span>👑</span><span>Upgrade Pro</span>
+      </a>
+    </nav>
+  </aside>
+
 <script>
 const apiKey = localStorage.getItem('apikey') || '';
 if (!apiKey) {
   alert('Session login tidak ditemukan. Silakan login dulu.');
   location.href = '/login';
 }
+
+const sidebar = document.getElementById('sidebar');
+const menuOverlay = document.getElementById('menuOverlay');
+const menuIcon = document.getElementById('menuIcon');
+
+function openSidebar() {
+  sidebar.classList.remove('-translate-x-full');
+  menuOverlay.classList.remove('opacity-0', 'pointer-events-none');
+  menuIcon.classList.add('rotate-90');
+}
+
+function closeSidebar() {
+  sidebar.classList.add('-translate-x-full');
+  menuOverlay.classList.add('opacity-0', 'pointer-events-none');
+  menuIcon.classList.remove('rotate-90');
+}
+
+document.getElementById('menuBtn').addEventListener('click', openSidebar);
+document.getElementById('closeMenuBtn').addEventListener('click', closeSidebar);
+menuOverlay.addEventListener('click', closeSidebar);
 
 document.getElementById('logoutBtn').addEventListener('click', () => {
   localStorage.removeItem('apikey');
