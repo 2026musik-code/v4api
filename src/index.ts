@@ -703,7 +703,7 @@ const dashboardHtml = `<!DOCTYPE html>
     </div>
 
     <nav class="space-y-3">
-      <a href="#" class="flex items-center gap-3 px-4 py-3 rounded-xl border border-cyan-400/40 bg-slate-900/50 hover:border-cyan-300 transition">
+      <a href="#" id="btnMenuAkun" class="flex items-center gap-3 px-4 py-3 rounded-xl border border-cyan-400/40 bg-slate-900/50 hover:border-cyan-300 transition">
         <span>👤</span><span>Akun Saya</span>
       </a>
       <a href="#" class="flex items-center gap-3 px-4 py-3 rounded-xl border border-cyan-400/40 bg-slate-900/50 hover:border-cyan-300 transition">
@@ -715,6 +715,22 @@ const dashboardHtml = `<!DOCTYPE html>
     </nav>
   </aside>
 
+  <div id="accountModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/55 backdrop-blur-md p-4">
+    <div class="w-full max-w-md rounded-2xl border border-cyan-400/40 bg-slate-900/85 backdrop-blur-xl p-5">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-xl font-bold text-white">Akun Saya</h3>
+        <button id="closeAccountBtn" class="px-3 py-1 rounded-lg border border-white/20 text-white">✕</button>
+      </div>
+      <div class="space-y-3 text-sm">
+        <p class="text-white"><span class="text-cyan-300 font-semibold">Nama:</span> <span id="accNama">-</span></p>
+        <p class="text-white"><span class="text-cyan-300 font-semibold">Email:</span> <span id="accEmail">-</span></p>
+        <p class="text-white"><span class="text-cyan-300 font-semibold">No WA:</span> <span id="accWa">-</span></p>
+        <p class="text-white break-all"><span class="text-cyan-300 font-semibold">API Key:</span> <span id="accKey">-</span></p>
+      </div>
+      <button id="closeAccountFooterBtn" class="mt-5 w-full px-4 py-2 rounded-xl border border-cyan-400/40 text-white hover:border-cyan-300 transition">TUTUP</button>
+    </div>
+  </div>
+
 <script>
 const apiKey = localStorage.getItem('apikey') || '';
 if (!apiKey) {
@@ -725,6 +741,18 @@ if (!apiKey) {
 const sidebar = document.getElementById('sidebar');
 const menuOverlay = document.getElementById('menuOverlay');
 const menuIcon = document.getElementById('menuIcon');
+const accountModal = document.getElementById('accountModal');
+
+function openAccount() {
+  closeSidebar();
+  accountModal.classList.remove('hidden');
+  accountModal.classList.add('flex');
+}
+
+function closeAccount() {
+  accountModal.classList.add('hidden');
+  accountModal.classList.remove('flex');
+}
 
 function openSidebar() {
   sidebar.classList.remove('-translate-x-full');
@@ -741,6 +769,10 @@ function closeSidebar() {
 document.getElementById('menuBtn').addEventListener('click', openSidebar);
 document.getElementById('closeMenuBtn').addEventListener('click', closeSidebar);
 menuOverlay.addEventListener('click', closeSidebar);
+document.getElementById('btnMenuAkun').addEventListener('click', (e) => { e.preventDefault(); openAccount(); });
+document.getElementById('closeAccountBtn').addEventListener('click', closeAccount);
+document.getElementById('closeAccountFooterBtn').addEventListener('click', closeAccount);
+accountModal.addEventListener('click', (e) => { if (e.target === accountModal) closeAccount(); });
 
 document.getElementById('logoutBtn').addEventListener('click', () => {
   localStorage.removeItem('apikey');
@@ -761,6 +793,11 @@ async function load() {
   document.getElementById('nama').textContent = data.user.nama;
   document.getElementById('sisa').textContent = String(data.user.remaining);
   document.getElementById('hit').textContent = String(data.user.total_hit);
+
+  document.getElementById('accNama').textContent = data.user.nama || '-';
+  document.getElementById('accEmail').textContent = data.user.email || '-';
+  document.getElementById('accWa').textContent = data.user.no_wa || '-';
+  document.getElementById('accKey').textContent = apiKey || '-';
 
   body.innerHTML = data.gateways.map((g) => {
     const example = location.origin + '/api/gateway/' + g.key + '?apikey=' + apiKey;
